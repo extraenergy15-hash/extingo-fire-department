@@ -1,1 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Extingo Fire Department — Dashboard</title>
 
+<script>
+  // Guard first, before anything paints: bounce unauthenticated visitors
+  // straight back to the passcode gate.
+  if (sessionStorage.getItem("extingo_dept_auth") !== "true") {
+    window.location.replace("index.html");
+  }
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap"
+  rel="stylesheet"
+/>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""
+/>
+
+<style>
+  :root {
+    --ink: #eef1f4;
+    --ink-dim: #99a2ad;
+    --ink-faint: #626b76;
+    --bg: #10131a;
+    --card: #191d25;
+    --card-alt: #1f242d;
+    --card-edge: #2a2f38;
+    --ember: #ff5a29;
+    --ember-dim: #c74620;
+    --ember-glow: rgba(255, 90, 41, 0.35);
+    --brass: #d8ab52;
+    --danger: #ff6b5e;
+    --ok: #5fbf88;
+
+    --font-display: "Oswald", "Arial Narrow", sans-serif;
+    --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+
+    --status-bar-h: 84px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--ink);
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  /* ---------- Status / siren bar ---------- */
+
+  .status-bar {
+    position: relative;
+    height: var(--status-bar-h);
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border-bottom: 1px solid var(--card-edge);
+    overflow: hidden;
+    z-index: 20;
+  }
+
+  .status-bar__sweep {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    background: repeating-linear-gradient(
+      110deg,
+      var(--ember-glow) 0px,
+      var(--ember-glow) 26px,
+      transparent 26px,
+      transparent 68px
+    );
+    background-size: 200% 100%;
+    transition: opacity 0.3s ease;
+  }
+
+  .status-bar[data-state="active-alarm"] .status-bar__sweep {
+    opacity: 1;
+    animation: sweep 2.4s linear infinite;
+  }
+
+  .status-bar[data-state="silenced"] .status-bar__sweep {
+    opacity: 0.4;
+  }
+
+  @keyframes sweep {
+    from { background-position: 0% 0; }
+    to { background-position: -200% 0; }
+  }
+
+  .status-bar__content {
+    position: relative;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 24px;
+  }
+
+  .status-bar__left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .status-bar__dot {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--ok);
+    flex-shrink: 0;
+    transition: background 0.2s ease;
+  }
+
+  .status-bar[data-state="active-alarm"] .status-bar__dot {
+    background: var(--ember);
+    animation: dot-pulse 1s ease-in-out infinite;
+  }
+
+  .status-bar[data-state="silenced"] .status-bar__dot {
+    background: var(--brass);
+  }
+
+  @keyframes dot-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 90, 41, 0.6); }
+    50% { box-shadow: 0 0 0 7px rgba(255, 90, 41, 0); }
+  }
+
+  .status-bar__eyebrow {
+    margin: 0 0 2px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--brass);
+  }
+
+  .status-bar__headline {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .status-bar[data-state="active-alarm"] .status-bar__headline {
+    color: var(--ember);
+  }
+  .status-bar[data-state="silenced"] .status-bar__headline {
+    color: var(--brass);
+  }
+
+  .status-bar__right {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-shrink: 0;
+  }
+
+  .status-bar__meta {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    display: none;
+  }
+
+  @media (min-width: 640px) {
+    .status-bar__meta { display: block; }
+  }
+
+  .silence-btn {
+    padding: 11px 18px;
+    border: 1px solid var(--card-edge);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .status-bar[data-state="active-alarm"] .silence-btn {
+    background: var(--ember);
+    border-color: var(--ember);
+    color: #17100b;
+  }
+
+  .status-bar[data-state="active-alarm"] .silence-btn:hover {
+    filter: brightness(1.08);
+  }
+
+  .silence-btn:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .status-bar[data-state="silenced"] .silence-btn {
+    border-color: var(--brass);
+    color: var(--brass);
+  }
+
+  .logout-link {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+  }
+
+  .logout-link:hover {
+    color: var(--ink-dim);
+  }
+
+  /* ---------- Map + panel body ---------- */
+
+  .dispatch-body {
+    position: relative;
+    height: calc(100vh - var(--status-bar-h));
+    width: 100%;
+  }
+
+  .map {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: var(--bg);
+  }
+
+  /* Marker dots (rendered inside Leaflet divIcon) */
+  .marker-dot {
+    display: block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--bg);
+  }
+
+  .marker-dot--active {
+    background: var(--ember);
+    box-shadow: 0 0 0 0 rgba(255, 90, 41, 0.6);
+    animation: dot-pulse 1s ease-in-out infinite;
+  }
+
+  .marker-dot--resolved {
+    background: var(--ink-faint);
+  }
+
+  /* Leaflet popup theming */
+  .leaflet-popup-content-wrapper {
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 4px;
+    border: 1px solid var(--card-edge);
+  }
+  .leaflet-popup-tip {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+  }
+  .leaflet-popup-content { margin: 14px 16px; }
+  .leaflet-container a.leaflet-popup-close-button {
+    color: var(--ink-faint);
+  }
+
+  .incident-popup__eyebrow {
+    margin: 0 0 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--brass);
+  }
+  .incident-popup__address {
+    margin: 0 0 4px;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 15px;
+    text-transform: uppercase;
+  }
+  .incident-popup__meta,
+  .incident-popup__coords {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-dim);
+  }
+  .incident-popup__tag {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .incident-popup__tag--active {
+    background: rgba(255, 90, 41, 0.15);
+    color: var(--ember);
+  }
+  .incident-popup__tag--resolved {
+    background: rgba(153, 162, 173, 0.15);
+    color: var(--ink-dim);
+  }
+  .incident-popup__resolve {
+    display: block;
+    margin-top: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--card-edge);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .incident-popup__resolve:hover {
+    border-color: var(--ember);
+    color: var(--ember);
+  }
+
+  /* ---------- History panel toggle tab ---------- */
+
+  .history-toggle {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 4px;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 12px 24px -12px rgba(0, 0, 0, 0.5);
+  }
+
+  .history-toggle:hover {
+    border-color: var(--brass);
+  }
+
+  .history-toggle__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    background: var(--brass);
+    color: #1c1608;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* ---------- History panel ---------- */
+
+  .history-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 360px;
+    max-width: 92vw;
+    background: var(--card);
+    border-left: 1px solid var(--card-edge);
+    z-index: 15;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    box-shadow: -20px 0 40px -20px rgba(0, 0, 0, 0.5);
+  }
+
+  .history-panel.is-open {
+    transform: translateX(0);
+  }
+
+  .history-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--card-edge);
+    flex-shrink: 0;
+  }
+
+  .history-panel__eyebrow {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brass);
+  }
+
+  .history-close {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--card-edge);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .history-close:hover {
+    color: var(--ink);
+    border-color: var(--ember);
+  }
+
+  .history-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px 12px 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .history-empty {
+    padding: 24px 8px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+
+  .history-item {
+    padding: 13px 12px;
+    margin-bottom: 6px;
+    border-radius: 3px;
+    background: var(--card-alt);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .history-item:hover,
+  .history-item:focus-visible {
+    border-color: var(--card-edge);
+    background: #232833;
+    outline: none;
+  }
+
+  .history-item__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .history-item__type {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+  }
+
+  .history-item__status {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .history-item__status--active {
+    background: rgba(255, 90, 41, 0.15);
+    color: var(--ember);
+  }
+  .history-item__status--resolved {
+    background: rgba(153, 162, 173, 0.12);
+    color: var(--ink-dim);
+  }
+
+  .history-item__address {
+    margin: 0 0 6px;
+    font-size: 13px;
+    color: var(--ink);
+  }
+
+  .history-item__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+  }
+
+  .history-item__coords {
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+  <header id="status-bar" class="status-bar" data-state="all-clear">
+    <div class="status-bar__sweep" aria-hidden="true"></div>
+    <div class="status-bar__content">
+      <div class="status-bar__left">
+        <span class="status-bar__dot" aria-hidden="true"></span>
+        <div>
+          <p class="status-bar__eyebrow">Unit 12 &middot; Dispatch Status</p>
+          <p class="status-bar__headline" id="status-headline">All Clear</p>
+        </div>
+      </div>
+      <div class="status-bar__right">
+        <p class="status-bar__meta" id="status-meta">Last update &mdash;</p>
+        <button id="silence-btn" class="silence-btn" type="button" disabled>Silence Alarm</button>
+        <button id="logout-btn" class="logout-link" type="button">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="dispatch-body">
+    <main id="map" class="map" role="application" aria-label="Incident map"></main>
+
+    <button
+      id="history-toggle"
+      class="history-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="history-panel"
+    >
+      <span>Incident Log</span>
+      <span class="history-toggle__count" id="history-count">0</span>
+    </button>
+
+    <aside id="history-panel" class="history-panel" aria-hidden="true" aria-label="Incident history">
+      <div class="history-panel__header">
+        <p class="history-panel__eyebrow">Incident History</p>
+        <button id="history-close" class="history-close" type="button" aria-label="Close incident history">&times;</button>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
+    </aside>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="js/api.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/alarm.js"></script>
+  <script>
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      sessionStorage.removeItem("extingo_dept_auth");
+      window.location.href = "index.html";
+    });
+  </script>
+</body>
+</html>
